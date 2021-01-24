@@ -125,7 +125,7 @@ func (s *Simulator) report() {
 		writeWorks += worker.WorksDone
 	}
 	passedDuration := s.endTime.Sub(s.startTime)
-	throughput := float64(writeWorks) / float64(passedDuration/time.Second)
+	throughput := float64(writeWorks) / passedDuration.Seconds()
 	s.logger.WithFields(logrus.Fields{
 		"event":           "Test Done",
 		"totalTime":       fmt.Sprint(passedDuration),
