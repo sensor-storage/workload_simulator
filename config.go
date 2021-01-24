@@ -3,6 +3,7 @@ package main
 import (
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
+	"time"
 )
 
 type InfluxDBConfig struct {
@@ -12,17 +13,25 @@ type InfluxDBConfig struct {
 	Bucket       string
 }
 
-type WorkerTemplate struct {
+type WriterTemplate struct {
 	Measurement  string
 	Tags         []string `yaml:",flow"`
 	Fields       []string `yaml:",flow"`
 	Workers      int
-	EmitInterval int `yaml:"emitInterval,flow"`
+	EmitInterval time.Duration `yaml:"emitInterval,flow"`
+	BatchSize    uint          `yaml:"batchSize"`
+}
+
+type CheckerConfig struct {
+	Query    string
+	Interval time.Duration
+	Name     string
 }
 
 type WorkloadConfig struct {
-	WorkerTemplates []WorkerTemplate `yaml:"workerTemplates,flow"`
-	LogPerWorks     int              `yaml:"logPerWorks,flow"`
+	Checkers        []CheckerConfig  `yaml:",flow"`
+	WriterTemplates []WriterTemplate `yaml:"writerTemplates,flow"`
+	LogPerWorks     uint             `yaml:"logPerWorks,flow"`
 }
 
 type Config struct {
