@@ -3,22 +3,26 @@ package main
 import (
 	"context"
 	"fmt"
-	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
-	"github.com/influxdata/influxdb-client-go/v2/api"
-	"github.com/sirupsen/logrus"
 	"math"
 	"sort"
 	"time"
+
+	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
+	"github.com/influxdata/influxdb-client-go/v2/api"
+	"github.com/sirupsen/logrus"
 )
 
+//Checker is ...
 type Checker struct {
 	Worker
-	queryAPI  api.QueryAPI
-	query     string
-	interval  time.Duration
-	Latencies []time.Duration
+	checkerConfig CheckerConfig
+	queryAPI      api.QueryAPI
+	query         string
+	interval      time.Duration
+	Latencies     []time.Duration
 }
 
+//NewChecker is ...
 func NewChecker(cancelCtx context.Context, db InfluxDBConfig, config CheckerConfig) *Checker {
 	client := influxdb2.NewClient(db.Host, db.Token)
 	worker := &Checker{
@@ -27,10 +31,11 @@ func NewChecker(cancelCtx context.Context, db InfluxDBConfig, config CheckerConf
 			client:    client,
 			name:      config.Name,
 		},
-		queryAPI:  client.QueryAPI(db.Organization),
-		query:     config.Query,
-		interval:  config.Interval,
-		Latencies: make([]time.Duration, 0),
+		checkerConfig: config,
+		queryAPI:      client.QueryAPI(db.Organization),
+		query:         config.Query,
+		interval:      config.Interval,
+		Latencies:     make([]time.Duration, 0),
 	}
 
 	return worker
@@ -53,6 +58,7 @@ func (c *Checker) execQuery() error {
 	return nil
 }
 
+//DoWork is ...
 func (c *Checker) DoWork(logger *logrus.Logger, logPerWorks uint) {
 	for true {
 		select {
@@ -70,7 +76,7 @@ func (c *Checker) DoWork(logger *logrus.Logger, logPerWorks uint) {
 			}
 			endTime := time.Now()
 			c.Latencies = append(c.Latencies, endTime.Sub(startTime))
-			c.WorksDone += 1
+			c.WorksDone++
 
 			if c.WorksDone%logPerWorks == 0 {
 				logger.WithFields(logrus.Fields{
@@ -84,11 +90,13 @@ func (c *Checker) DoWork(logger *logrus.Logger, logPerWorks uint) {
 	}
 }
 
+//CollectLatencies is ...
 func (c *Checker) CollectLatencies() (time.Duration, time.Duration, time.Duration) {
 	sort.Slice(c.Latencies, func(i, j int) bool {
 		return c.Latencies[i] < c.Latencies[j]
 	})
 	numLatencies := len(c.Latencies)
+	fmt.Println(numLatencies)
 	index90Percent := uint(math.Ceil(float64(numLatencies)*0.9)) - 1
 	index95Percent := uint(math.Ceil(float64(numLatencies)*0.95)) - 1
 	index99Percent := uint(math.Ceil(float64(numLatencies)*0.99)) - 1
