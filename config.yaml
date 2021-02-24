@@ -1,0 +1,133 @@
+influxDB:
+  host: "http://localhost:8086"
+  token: "QIypCZDwHiEpUaRe10h1XaOYQbVcvPENWH_84ejDF-pUYSblnEv8RGlrkCaiQfYwEU75rHcN48EIhocGSSoHgg=="
+  organization: "sqy"
+  bucket: "water_machine"
+workload:
+  logPerWorks: 100
+  writerTemplates:
+    #这里measurement是worker的名字
+    - measurement: machine
+      workers: 20
+      emitInterval: 1s
+      batchSize: 150
+  writerWithoutBatchTemplates:
+    # ！measurement 中不能出现下划线！
+    - measurement: alertInformation  
+      fields:
+        - alert_kind
+      workers: 20
+      emitInterval: 0.1s
+  checkers:
+    # 关键数据限值报警
+    # 这里之前设想有误，认为每个关键数据，即每条时间线需要一个checker，由此得来并发量
+    # 实际上，由于本例中关键数据属于相同的measurement且具有相同限值，因此只需要一个查询，即可在所有机器上应用条件逻辑（即使不写明group，也会自动进行group）
+    - query: |
+        from(bucket: "water_machine")
+        |> range(start: -1s)
+        |> filter(fn: (r) => r["_measurement"] == "alertInformation")
+        |> filter(fn: (r) => r["_field"] == "alert_kind")
+        |> group(columns: ["writer"])
+        |> last()
+      interval: 0.1s
+      name: 关键报警数据限值报警
+    # 仪表停用或网络故障报警，对网关设备进行group
+    - query: |
+        from(bucket: "water_machine")
+        |> range(start: -10s)
+        |> filter(fn: (r) => r["_field"] == "alert_kind")
+        |> group(columns: ["writer"])
+        |> last()
+      interval: 10s
+      name: 仪表停用或网络故障报警
+    # 变化率报警分两种方法：下面依次说明
+    # 由于不同测量值和不同测量点工艺要求不同，变化率限值不同，由此带来高并发量。在本例中共有15种测量数据，因此需要15并发量
+    # 固定点差值法取微小间隔的起始点数值，将终值与其做差，要求微小间隔内数值变化方向不变，否则会出现漏报
+    - query: |
+        period = from(bucket: "water_machine")
+        |> range(start: -1s)
+        |> filter(fn: (r) => r["_measurement"] == "water_pressure")
+        |> filter(fn: (r) => r["_field"] == "water_pressure")
+        |> filter(fn: (r) => r["component"] == "Softener")
+        join(tables: {first:period |> first(), last:period |> last()}, on: ["writer"])
+          |> map(fn: (r) => ({
+              _time: r._time,
+              _value: r._value_last - r._value_first
+            })
+          )
+          |> map(fn: (r) => ({
+            r with
+            level:
+              if r._value >= 0.75000001 then "critical"
+              else if r._value >= 0.5 and r._value <= 0.75 then "warning"
+              else "normal"
+            })
+          )
+      interval: 1s
+      name: 固定点差值变化率报警
+      # checkerNumber: 15
+    # 导数法，直接计算相邻值之间的导数，应用更加广泛
+    - query: |
+        from(bucket: "water_machine")
+        |> range(start: -1s)
+        |> filter(fn: (r) => r["_measurement"] == "water_pressure")
+        |> filter(fn: (r) => r["_field"] == "water_pressure")
+        |> filter(fn: (r) => r["component"] == "Softener")
+        |> derivative(
+          unit: 1s,
+          nonNegative: false
+        )
+      interval: 1s
+      name: 导数法变化率报警
+      # checkerNumber: 15
+    # 自定义报警：结合多种数据，利用其相关性得到新的物理量或确定组合逻辑实现报警。多个限值条件在逻辑组合时，对每种数据要求低于该数据限值报警阈值。
+    - query: |
+        inlet1 = from(bucket: "water_machine")
+        |> range(start: -1m)
+        |> filter(fn: (r) => r["_measurement"] == "water_pressure")
+        |> filter(fn: (r) => r["_field"] == "inlet")
+        |> filter(fn: (r) => r["component"] == "EDI")
+        |> aggregateWindow(every: 5s, fn: mean, createEmpty: false)
+        outlet1 = from(bucket: "water_machine")
+        |> range(start: -1m)
+        |> filter(fn: (r) => r["_measurement"] == "water_pressure")
+        |> filter(fn: (r) => r["_field"] == "outlet")
+        |> filter(fn: (r) => r["component"] == "EDI")
+        |> aggregateWindow(every: 5s, fn: mean, createEmpty: false)
+        join(tables: {inlet:inlet1, outlet:outlet1}, on: ["_stop", "_start", "_time", "writer"])
+          |> map(fn: (r) => ({
+              _time: r._time,
+              _value: r._value_outlet - r._value_inlet
+            })
+          )
+          |> stddev()
+      interval: 5s
+      name: EDI进出水口压差自定义报警
+      # checkerNumber: 10
+    # 显示功能的查询用例，以单个机器作为子系统，要求各部件全面视图
+    - query: |
+        from(bucket: "water_machine")
+        |> range(start: -15m)
+        |> filter(fn: (r) => r["writer"] == "machine_12")
+        |> aggregateWindow(every: 10s, fn: mean, createEmpty: false)
+        |> yield(name: "mean")
+      interval: 5s
+      name: 单机器综合状态显示图
+      # checkerNumber: 20
+    # 显示功能的查询用例，显示某种数据的变化趋势图
+    - query: |
+        from(bucket: "water_machine")
+        |> range(start: -15m)
+        |> filter(fn: (r) => r["_measurement"] == "water_hardness")
+        |> filter(fn: (r) => r["_field"] == "water_hardness")
+        |> filter(fn: (r) => r["component"] == "Softener")
+        |> aggregateWindow(every: 10s, fn: mean, createEmpty: false)
+        |> yield(name: "mean")
+      interval: 5s
+      name: 各机器软化器出水硬度趋势图
+      checkerNumber: 8
+    
+        
+    
+    
+    
